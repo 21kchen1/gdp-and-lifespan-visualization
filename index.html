@@ -757,7 +757,7 @@
                 function updateBarChart(year, attribute) {
                     const filteredData = data.filter(d => d.year == year);
 
-                    const summedData = d3.rollup(filteredData, v => d3.sum(v, d => +d[attribute]), d => d.region);
+                    const summedData = d3.rollup(filteredData, v => d3.mean(v, d => +d[attribute]), d => d.region);
 
                     const dataArray = Array.from(summedData, ([key, value]) => ({ region: key, value }));
 
