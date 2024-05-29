@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title> Gapminder Visualization </title>
+    <style>
+        body {
+            width: 100%;
+            height: 100%;
+            display: flex;
+        }
+
+        .leftBox {
+            display: flex;
+            flex-direction: column;
+            width: 60%;
+            height: 100%;
+            align-items: center;
+            text-align: center;
+        }
+
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            width: fit-content;
+            padding: 10px;
+            font: 12px sans-serif;
+            font-weight: 800;
+            background: white;
+            border: 1px solid #333;
+            border-radius: 5px;
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        .bubble {
+            opacity: 0.7;
+            stroke: black;
+            stroke-width: 1px;
+        }
+
+        .grid line {
+            stroke: lightgray;
+            stroke-opacity: 0.7;
+            shape-rendering: crispEdges;
+        }
+
+        .grid path {
+            stroke-width: 0;
+        }
+
+        #slider-container {
+            width: fit-content;
+            margin: 20px;
+        }
+
+        #play-button {
+            margin: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+
+        .axis-label {
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .hover-line {
+            stroke: gray;
+            stroke-dasharray: 3, 3;
+        }
+
+        .hover-text {
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        #legend {
+            text-align: center;
+            display: flex;
+            width: 100%;
+        }
+
+        #legend div {
+            display: flex;
+            width: 20%;
+            color: white;
+            font-weight: 800;
+            align-items: center;
+            text-align: center;
+            justify-content: center;
+        }
+
+        /*  */
+        .rightBox {
+            width: 40%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            justify-content: space-around;
+        }
+
+        #map,
+        #bar_chart {
+            width: 100%;
+            height: 40%;
+            flex: 1;
+        }
+
+        /*  */
+    </style>
+</head>
+
+<body>
+    <div class="leftBox">
+        <div id="chart"></div>
+        <div id="slider-container">
+            <input type="range" min="0" max="0" value="0" id="year-slider">
+            <button id="play-button">Play</button>
+        </div>
+        <div class="tooltip" id="tooltip"></div>
+        <div id="legend"></div>
+    </div>
+
+    <!-- 地图部分 -->
+    <div class="rightBox">
+        <div style="height: 10%;"> </div>
+        <div>
+            <input type="number" id="yearInput" value="1800" min="1800" max="2100">
+            <select id="attributeSelect">
+                <option value="income">Income</option>
+                <option value="population">Population</option>
+                <option value="lifeExpectancy">Life Expectancy</option>
+            </select>
+        </div>
+
+        <div id="map"></div>
+        <div id="bar_chart"></div>
+    </div>
+    <!--  -->
+
+    <!-- 地图部分引用 -->
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <script src="https://d3js.org/topojson.v1.min.js"></script>
+    <script src="https://d3js.org/d3-legend.v2.min.js"></script>
+    <script src="./lib/d3-legend.js"></script>
+    <!--  -->
+
+    <script src="https://d3js.org/d3.v7.js"></script>
+
+    <script type="text/javascript">
+
+        // 获取容器大小
+        leftBox = document.querySelector(".leftBox");
+        leftBoxStyle = window.getComputedStyle(leftBox);
+        leftBoxWidth = parseFloat(leftBoxStyle.width);
+
+        // 设置图表的宽度、高度和边距
+        const margin = { top: leftBoxWidth * 0.1, right: leftBoxWidth * 0.025, bottom: leftBoxWidth * 0.05, left: leftBoxWidth * 0.075 },
+            width = leftBoxWidth - margin.left - margin.right,
+            height = leftBoxWidth * 0.66 - margin.top - margin.bottom;
+
+        // 创建SVG容器
+        const svg = d3.select("#chart").append("svg")
+            .attr("width", width + margin.left + margin.right)
+            .attr("height", height + margin.top + margin.bottom)
+            .append("g")
+            .attr("transform", `translate(${margin.left},${margin.top})`);
+
+        // 设置x轴和y轴的比例尺
+        const x = d3.scaleLog().base(10).range([0, width]);
+        const y = d3.scaleLinear().range([height, 0]);
+        const radius = d3.scaleSqrt().range([0, 40]);
+        const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+        // 设置x轴和y轴
+        const xAxis = d3.axisBottom(x).ticks(10, ",");
+        const yAxis = d3.axisLeft(y);
+
+        // 创建网格线
+        function makeXGridlines() {
+            return d3.axisBottom(x).ticks(10);
+        }
+
+        function makeYGridlines() {
+            return d3.axisLeft(y).ticks(10);
+        }
+
+        // 创建提示框
+        const tooltip = d3.select("#tooltip");
+
+        // 添加背景年份文本
+        const yearText = svg.append("text")
+            .attr("class", "year-text")
+            .attr("x", width / 2)
+            .attr("y", height / 1.5)
+            .attr("text-anchor", "middle")
+            .attr("font-size", leftBoxWidth * 0.23 + "px")
+            .attr("fill", "lightgray")
+            .attr("opacity", 0.5)
+            .text("0");
+
+        // 添加虚线和文字元素
+        const hoverLineX = svg.append("line")
+            .attr("class", "hover-line")
+            .attr("y1", 0)
+            .attr("y2", height)
+            .style("opacity", 0);
+
+        const hoverLineY = svg.append("line")
+            .attr("class", "hover-line")
+            .attr("x1", 0)
+            .attr("x2", width)
+            .style("opacity", 0);
+
+        const hoverTextX = svg.append("text")
+            .attr("class", "hover-text")
+            .attr("text-anchor", "middle")
+            .style("opacity", 0);
+
+        const hoverTextY = svg.append("text")
+            .attr("class", "hover-text")
+            .attr("text-anchor", "middle")
+            .style("opacity", 0);
+
+        // 读取CSV数据
+        d3.csv("./data/newData.csv").then(data => {
+            d3.json('./lib/world.geojson').then(function (geojson) {
+                // 数据处理：将字符串转换为数值类型
+                data.forEach(d => {
+                    d.year = +d.year;
+                    d.income = +d.income;
+                    d.lifeExpectancy = +d.lifeExpectancy;
+                    d.population = +d.population;
+                });
+
+                // 按年份组织数据
+                const nestedData = d3.groups(data, d => d.year);
+                const years = nestedData.map(d => d[0]);
+                const allCountries = data;
+
+                // 设置比例尺的域
+                x.domain(d3.extent(allCountries, d => d.income));
+                y.domain(d3.extent(allCountries, d => d.lifeExpectancy));
+                radius.domain(d3.extent(allCountries, d => d.population));
+
+                // 添加网格线到SVG容器
+                svg.append("g")
+                    .attr("class", "grid")
+                    .attr("transform", `translate(0,${height})`)
+                    .call(makeXGridlines()
+                        .tickSize(-height)
+                        .tickFormat(""));
+
+                svg.append("g")
+                    .attr("class", "grid")
+                    .call(makeYGridlines()
+                        .tickSize(-width)
+                        .tickFormat(""));
+
+                // 添加x轴和y轴到SVG容器
+                svg.append("g")
+                    .attr("class", "x axis")
+                    .attr("transform", `translate(0,${height})`)
+                    .call(xAxis);
+
+                svg.append("text")
+                    .attr("class", "axis-label")
+                    .attr("x", width / 1.75)
+                    .attr("y", height * 1.06)
+                    .style("text-anchor", "end")
+                    .text("Income (log scale)");
+
+                svg.append("g")
+                    .attr("class", "y axis")
+                    .call(yAxis)
+
+                svg.append("text")
+                    .attr("class", "axis-label")
+                    .attr("transform", "rotate(-90)")
+                    .attr("x", -height / 2 * 0.8)
+                    .attr("y", -width * 0.04)
+                    .attr("dy", ".71em")
+                    .style("text-anchor", "end")
+                    .text("Life Expectancy");
+
+                // 数据格式化
+                function formatNumber(num) {
+                    if (num >= 1e9) {
+                        return (num / 1e9).toFixed(1) + "B";
+                    } else if (num >= 1e6) {
+                        return (num / 1e6).toFixed(1) + "M";
+                    } else if (num >= 1e3) {
+                        return (num / 1e3).toFixed(1) + "k";
+                    } else {
+                        return num.toFixed(1);
+                    }
+                }
+
+                // 当鼠标进入气泡时，显示具体信息
+                function bubbleMouseenterEvent(event, d) {
+                    tooltip.transition()
+                        .duration(200)
+                        .style("opacity", 0.9);
+
+
+
+                    tooltip.html(`${d.name}<br>Population: ${formatNumber(d.population)}`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 28) + "px");
+
+                    const cx = x(d.income);
+                    const cy = y(d.lifeExpectancy);
+
+                    hoverLineX.attr("x1", cx)
+                        .attr("x2", cx)
+                        .style("opacity", 1);
+
+                    hoverLineY.attr("y1", cy)
+                        .attr("y2", cy)
+                        .style("opacity", 1);
+
+                    hoverTextX.attr("x", cx)
+                        .attr("y", height + 15)
+                        .text(d.income)
+                        .style("opacity", 1);
+
+                    hoverTextY.attr("x", -20)
+                        .attr("y", cy)
+                        .text(d.lifeExpectancy)
+                        .style("opacity", 1);
+                }
+
+                // 创建一个函数来更新气泡图
+                function update(year) {
+                    // 查找 year 相同的数据
+                    const currentYearData = nestedData.find(d => d[0] === year)[1];
+
+                    // 更新所有气泡
+                    const circles = svg.selectAll(".bubble")
+                        .data(currentYearData, d => d.name);
+
+                    // 设置属性
+                    circles.enter().append("circle")
+                        .attr("class", "bubble")
+                        .attr("cx", d => x(d.income))
+                        .attr("cy", d => y(d.lifeExpectancy))
+                        .attr("r", d => radius(d.population))
+                        .style("fill", d => color(d.region))
+                        // 显示详细信息
+                        .on("mouseenter", function (event, d) {
+                            bubbleMouseenterEvent(event, d);
+                        })
+                        // 清除信息
+                        .on("mouseleave", function (d) {
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                            hoverLineX.style("opacity", 0);
+                            hoverLineY.style("opacity", 0);
+                            hoverTextX.style("opacity", 0);
+                            hoverTextY.style("opacity", 0);
+                        })
+                        .on("click", function (event, d) {
+                            // 防止事件冒泡到SVG容器
+                            event.stopPropagation();
+                            const selectedRegion = d.region;
+                            svg.selectAll(".bubble")
+                                .filter(d => d.region === selectedRegion)
+                                .style("opacity", 0.7)
+                                .on("mouseenter", function (event, d) {
+                                    bubbleMouseenterEvent(event, d);
+                                })
+                                .raise();
+                            svg.selectAll(".bubble")
+                                .filter(d => d.region != selectedRegion)
+                                .style("opacity", 0.1)
+                                // 清除多余的效果 不显示详细信息
+                                .on("mouseenter", function () { })
+                        })
+                        .merge(circles)
+                        .transition().duration(500)
+                        .attr("cx", d => x(d.income))
+                        .attr("cy", d => y(d.lifeExpectancy))
+                        .attr("r", d => radius(d.population ** 1.05))
+                        .style("fill", d => color(d.region));
+
+                    circles.exit().remove();
+
+                    // 更新背景年份文本
+                    yearText.text(year);
+                }
+
+                // 添加一个透明矩形覆盖整个SVG容器
+                svg.append("rect")
+                    .attr("width", width)
+                    .attr("height", height)
+                    .style("fill", "none")
+                    .style("pointer-events", "all")
+                    .on("click", function () {
+                        svg.selectAll(".bubble")
+                            .style("opacity", 0.7)
+                            .on("mouseenter", function (event, d) {
+                                bubbleMouseenterEvent(event, d);
+                            });
+                    });
+
+                // 初始年份的气泡图
+                let currentYearIndex = 0;
+                update(years[currentYearIndex]);
+
+                // 设置滑动条的属性
+                const slider = document.getElementById("year-slider");
+                slider.max = years.length - 1;
+                slider.value = currentYearIndex;
+
+                // 调制滑动条样式
+                slider.style.width = width + "px";
+
+                // 滑动条事件监听器
+                slider.addEventListener("input", function () {
+                    currentYearIndex = +this.value;
+                    update(years[currentYearIndex]);
+                    drawMap(years[currentYearIndex], attributeSelect.value);
+                    updateBarChart(years[currentYearIndex], attributeSelect.value);
+                    yearInput.value = years[currentYearIndex];
+                });
+
+                // 自动播放功能
+                let playInterval;
+                const playButton = document.getElementById("play-button");
+                playButton.addEventListener("click", function () {
+                    if (playInterval) {
+                        clearInterval(playInterval);
+                        playInterval = null;
+                        playButton.textContent = "Play";
+                    } else {
+                        if (currentYearIndex === years.length - 1)
+                            return;
+                        playButton.textContent = "Pause";
+                        playInterval = setInterval(() => {
+                            currentYearIndex = (currentYearIndex + 1);
+                            slider.value = currentYearIndex;
+                            update(years[currentYearIndex]);
+                            drawMap(years[currentYearIndex], attributeSelect.value);
+                            updateBarChart(years[currentYearIndex], attributeSelect.value);
+                            yearInput.value = years[currentYearIndex];
+                            if (currentYearIndex === years.length - 1)
+                                playButton.click();
+                        }, 200);
+                    }
+                });
+
+                // 创建图例
+                function createLegend(data) {
+                    const regions = Array.from(new Set(data.map(d => d.region)));
+                    const legend = d3.select("#legend");
+
+                    legend.selectAll("div")
+                        .data(regions)
+                        .enter()
+                        .append("div")
+                        .style("background-color", d => color(d))
+                        .style("padding", "5px")
+                        .style("margin", "2px")
+                        .style("cursor", "pointer")
+                        .text(d => d)
+                        .on("click", function (event, d) {
+                            svg.selectAll(".bubble")
+                                .filter(e => e.region === d)
+                                .style("opacity", 0.7)
+                                .on("mouseenter", function (event, e) {
+                                    bubbleMouseenterEvent(event, e);
+                                })
+                                .raise();
+                            svg.selectAll(".bubble")
+                                .filter(e => e.region != d)
+                                .style("opacity", 0.1)
+                                // 清除多余的效果 不显示详细信息
+                                .on("mouseenter", function () { });
+                        });
+                }
+                createLegend(data);
+
+
+                // 地图部分
+                const countryMapping = {
+                    "Afghanistan": "AFG",
+                    "Albania": "ALB",
+                    "Algeria": "DZA",
+                    "Andorra": "AND",
+                    "Angola": "AGO",
+                    "Antigua and Barbuda": "ATG",
+                    "Argentina": "ARG",
+                    "Armenia": "ARM",
+                    "Australia": "AUS",
+                    "Austria": "AUT",
+                    "Azerbaijan": "AZE",
+                    "Bahamas": "BHS",
+                    "Bahrain": "BHR",
+                    "Bangladesh": "BGD",
+                    "Barbados": "BRB",
+                    "Belarus": "BLR",
+                    "Belgium": "BEL",
+                    "Belize": "BLZ",
+                    "Benin": "BEN",
+                    "Bhutan": "BTN",
+                    "Bolivia": "BOL",
+                    "Bosnia and Herzegovina": "BIH",
+                    "Botswana": "BWA",
+                    "Brazil": "BRA",
+                    "Brunei": "BRN",
+                    "Bulgaria": "BGR",
+                    "Burkina Faso": "BFA",
+                    "Burundi": "BDI",
+                    "Cabo Verde": "CPV",
+                    "Cambodia": "KHM",
+                    "Cameroon": "CMR",
+                    "Canada": "CAN",
+                    "Central African Republic": "CAF",
+                    "Chad": "TCD",
+                    "Chile": "CHL",
+                    "China": "CHN",
+                    "Colombia": "COL",
+                    "Comoros": "COM",
+                    "Congo, Democratic Republic of the": "COD",
+                    "Congo, Republic of the": "COG",
+                    "Costa Rica": "CRI",
+                    "Croatia": "HRV",
+                    "Cuba": "CUB",
+                    "Cyprus": "CYP",
+                    "Czech Republic": "CZE",
+                    "Denmark": "DNK",
+                    "Djibouti": "DJI",
+                    "Dominica": "DMA",
+                    "Dominican Republic": "DOM",
+                    "East Timor": "TLS",
+                    "Ecuador": "ECU",
+                    "Egypt": "EGY",
+                    "El Salvador": "SLV",
+                    "Equatorial Guinea": "GNQ",
+                    "Eritrea": "ERI",
+                    "Estonia": "EST",
+                    "Eswatini": "SWZ",
+                    "Ethiopia": "ETH",
+                    "Fiji": "FJI",
+                    "Finland": "FIN",
+                    "France": "FRA",
+                    "Gabon": "GAB",
+                    "Gambia": "GMB",
+                    "Georgia": "GEO",
+                    "Germany": "DEU",
+                    "Ghana": "GHA",
+                    "Greece": "GRC",
+                    "Grenada": "GRD",
+                    "Guatemala": "GTM",
+                    "Guinea": "GIN",
+                    "Guinea-Bissau": "GNB",
+                    "Guyana": "GUY",
+                    "Haiti": "HTI",
+                    "Honduras": "HND",
+                    "Hungary": "HUN",
+                    "Iceland": "ISL",
+                    "India": "IND",
+                    "Indonesia": "IDN",
+                    "Iran": "IRN",
+                    "Iraq": "IRQ",
+                    "Ireland": "IRL",
+                    "Israel": "ISR",
+                    "Italy": "ITA",
+                    "Jamaica": "JAM",
+                    "Japan": "JPN",
+                    "Jordan": "JOR",
+                    "Kazakhstan": "KAZ",
+                    "Kenya": "KEN",
+                    "Kiribati": "KIR",
+                    "Korea, North": "PRK",
+                    "Korea, South": "KOR",
+                    "Kosovo": "XKX",
+                    "Kuwait": "KWT",
+                    "Kyrgyzstan": "KGZ",
+                    "Laos": "LAO",
+                    "Latvia": "LVA",
+                    "Lebanon": "LBN",
+                    "Lesotho": "LSO",
+                    "Liberia": "LBR",
+                    "Libya": "LBY",
+                    "Liechtenstein": "LIE",
+                    "Lithuania": "LTU",
+                    "Luxembourg": "LUX",
+                    "Madagascar": "MDG",
+                    "Malawi": "MWI",
+                    "Malaysia": "MYS",
+                    "Maldives": "MDV",
+                    "Mali": "MLI",
+                    "Malta": "MLT",
+                    "Marshall Islands": "MHL",
+                    "Mauritania": "MRT",
+                    "Mauritius": "MUS",
+                    "Mexico": "MEX",
+                    "Micronesia": "FSM",
+                    "Moldova": "MDA",
+                    "Monaco": "MCO",
+                    "Mongolia": "MNG",
+                    "Montenegro": "MNE",
+                    "Morocco": "MAR",
+                    "Mozambique": "MOZ",
+                    "Myanmar": "MMR",
+                    "Namibia": "NAM",
+                    "Nauru": "NRU",
+                    "Nepal": "NPL",
+                    "Netherlands": "NLD",
+                    "New Zealand": "NZL",
+                    "Nicaragua": "NIC",
+                    "Niger": "NER",
+                    "Nigeria": "NGA",
+                    "North Macedonia": "MKD",
+                    "Norway": "NOR",
+                    "Oman": "OMN",
+                    "Pakistan": "PAK",
+                    "Palau": "PLW",
+                    "Palestine": "PSE",
+                    "Panama": "PAN",
+                    "Papua New Guinea": "PNG",
+                    "Paraguay": "PRY",
+                    "Peru": "PER",
+                    "Philippines": "PHL",
+                    "Poland": "POL",
+                    "Portugal": "PRT",
+                    "Qatar": "QAT",
+                    "Romania": "ROU",
+                    "Russia": "RUS",
+                    "Rwanda": "RWA",
+                    "Saint Kitts and Nevis": "KNA",
+                    "Saint Lucia": "LCA",
+                    "Saint Vincent and the Grenadines": "VCT",
+                    "Samoa": "WSM",
+                    "San Marino": "SMR",
+                    "Sao Tome and Principe": "STP",
+                    "Saudi Arabia": "SAU",
+                    "Senegal": "SEN",
+                    "Serbia": "SRB",
+                    "Seychelles": "SYC",
+                    "Sierra Leone": "SLE",
+                    "Singapore": "SGP",
+                    "Slovakia": "SVK",
+                    "Slovenia": "SVN",
+                    "Solomon Islands": "SLB",
+                    "Somalia": "SOM",
+                    "South Africa": "ZAF",
+                    "South Sudan": "SSD",
+                    "Spain": "ESP",
+                    "Sri Lanka": "LKA",
+                    "Sudan": "SDN",
+                    "Suriname": "SUR",
+                    "Sweden": "SWE",
+                    "Switzerland": "CHE",
+                    "Syria": "SYR",
+                    "Taiwan": "TWN",
+                    "Tajikistan": "TJK",
+                    "Tanzania": "TZA",
+                    "Thailand": "THA",
+                    "Togo": "TGO",
+                    "Tonga": "TON",
+                    "Trinidad and Tobago": "TTO",
+                    "Tunisia": "TUN",
+                    "Turkey": "TUR",
+                    "Turkmenistan": "TKM",
+                    "Tuvalu": "TUV",
+                    "Uganda": "UGA",
+                    "Ukraine": "UKR",
+                    "United Arab Emirates": "ARE",
+                    "United Kingdom": "GBR",
+                    "United States": "USA",
+                    "Uruguay": "URY",
+                    "Uzbekistan": "UZB",
+                    "Vanuatu": "VUT",
+                    "Vatican City": "VAT",
+                    "Venezuela": "VEN",
+                    "Vietnam": "VNM",
+                    "Yemen": "YEM",
+                    "Zambia": "ZMB",
+                    "Zimbabwe": "ZWE"
+                };
+
+                function drawMap(year, selectedAttribute) {
+                    var filteredData = data.filter(d => d.year == year);
+
+                    filteredData.forEach(function (d) {
+                        d.iso3 = countryMapping[d.name];
+                    });
+
+                    const dataMap = new Map(filteredData.map(d => [d.iso3, +d[selectedAttribute]]));
+
+                    const colorScale = d3.scaleSequential(d3.interpolateBlues)
+                        .domain(d3.extent(filteredData, d => +d[selectedAttribute]));
+                    // https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson
+
+                    geojson.features.forEach(function (d) {
+                        d.properties[selectedAttribute] = dataMap.get(d.id) || 0;
+                    });
+
+                    const svg = d3.select("#map").html("").append("svg")
+                        .attr("width", "90%")
+                        .attr("height", "90%");
+
+                    const projection = d3.geoMercator()
+                        .scale(100)
+                        .translate([svg.node().clientWidth / 2, svg.node().clientHeight / 1.5]);
+
+                    const path = d3.geoPath().projection(projection);
+
+                    svg.append("g")
+                        .selectAll("path")
+                        .data(geojson.features)
+                        .enter()
+                        .append("path")
+                        .attr("d", path)
+                        .attr("fill", d => colorScale(d.properties[selectedAttribute]))
+                        .attr("stroke", "#333")
+                        .on("mouseover", function (event, d) {
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", .9);
+                            tooltip.html(d.properties.name + "<br/>" + selectedAttribute + ": " + formatNumber(d.properties[selectedAttribute]))
+                                .style("left", (event.pageX) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mouseout", function (d) {
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+
+                    // Add legend
+                    const legendSvg = svg.append("g")
+                        .attr("class", "legendSequential")
+                        .attr("transform", "translate(20,20)")
+                        .attr("transform", `translate(20, ${svg.node().clientHeight - 150})`)
+                        .style("font-size", "15px")
+                        .style("font-weight", "600");
+
+                    const legendSequential = d3.legendColor()
+                        .shapeWidth(20)
+                        .shapeHeight(20)
+                        .cells(6)
+                        .orient("vertical")
+                        .labelFormat(formatNumber)
+                        .scale(colorScale);
+
+                    // 调整字体大小
+                    legendSvg.call(legendSequential);
+                }
+
+                function updateBarChart(year, attribute) {
+                    const filteredData = data.filter(d => d.year == year);
+
+                    const summedData = d3.rollup(filteredData, v => d3.sum(v, d => +d[attribute]), d => d.region);
+
+                    const dataArray = Array.from(summedData, ([key, value]) => ({ region: key, value }));
+
+                    const margin = { top: 10, right: 20, bottom: 100, left: 80 },
+                        width = leftBoxWidth * 0.5 - margin.left - margin.right,
+                        height = leftBoxWidth * 0.4 - margin.top - margin.bottom;
+
+                    const svg = d3.select("#bar_chart").html("").append("svg")
+                        .attr("width", width + margin.left + margin.right)
+                        .attr("height", height + margin.top + margin.bottom)
+                        .append("g")
+                        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+                    const x = d3.scaleBand()
+                        .range([0, width])
+                        .domain(dataArray.map(d => d.region))
+                        .padding(0.2);
+                    svg.append("g")
+                        .attr("transform", `translate(0, ${height})`)
+                        .call(d3.axisBottom(x))
+                        .selectAll("text")
+                        .attr("transform", "translate(-10,0)rotate(-35)")
+                        .style("text-anchor", "end")
+                        .style("font-size", "10px")
+                        .style("font-weight", "800");
+
+                    const y = d3.scaleLinear()
+                        .domain([0, d3.max(dataArray, d => d.value)])
+                        .range([height, 0]);
+                    svg.append("g")
+                        .call(d3.axisLeft(y).tickFormat(d => {
+                            return formatNumber(d);
+                        }))
+                        .style("font-size", "15px")
+                        .style("font-weight", "800");;
+
+                    svg.selectAll("bar")
+                        .data(dataArray)
+                        .enter()
+                        .append("rect")
+                        .attr("x", d => x(d.region))
+                        .attr("y", d => y(d.value))
+                        .attr("width", x.bandwidth())
+                        .attr("height", d => height - y(d.value))
+                        .attr("fill", "#69b3a2")
+                        .on("mouseover", function (event, d) {
+                            tooltip.transition()
+                                .duration(200)
+                                .style("opacity", .9);
+                            tooltip.html(d.region + "<br/>" + attribute + ": " + formatNumber(d.value))
+                                .style("left", (event.pageX) + "px")
+                                .style("top", (event.pageY - 28) + "px");
+                        })
+                        .on("mouseout", function (d) {
+                            tooltip.transition()
+                                .duration(500)
+                                .style("opacity", 0);
+                        });
+                }
+
+                var yearInput = document.getElementById('yearInput');
+                var attributeSelect = document.getElementById('attributeSelect');
+                yearInput.addEventListener('input', function () {
+                    var selectedYear = parseInt(yearInput.value);
+                    var selectedAttribute = attributeSelect.value;
+                    drawMap(selectedYear, selectedAttribute);
+                    updateBarChart(selectedYear, selectedAttribute);
+                });
+                attributeSelect.addEventListener('change', function () {
+                    var selectedYear = parseInt(yearInput.value);
+                    var selectedAttribute = attributeSelect.value;
+                    drawMap(selectedYear, selectedAttribute);
+                    updateBarChart(selectedYear, selectedAttribute);
+                });
+
+                drawMap(1800, 'income');
+                updateBarChart(1800, 'income');
+            });
+        });
+    </script>
+</body>
+
+</html>
